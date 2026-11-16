@@ -1,6 +1,7 @@
 
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
+#include <Ticker.h>
 #include <time.h>
 #include <string.h>
 #include <stdlib.h>
@@ -12,20 +13,67 @@
 #include "web_server.h"
 
 
-// System status
+// ==================================================
+// SYSTEM STATUS
+// ==================================================
+
 static bool storageReady = false;
 static bool fingerprintReady = false;
 
-// Serial command buffer
+
+// ==================================================
+// SERIAL COMMAND BUFFER
+// ==================================================
+
 static char serialLine[100];
 static size_t serialLineLength = 0;
 static bool serialLineOverflow = false;
 
-// R503 slot range assumed by this project
+
+// R503 slot range
 static const uint16_t MAX_FINGERPRINT_SLOTS = 200;
 
 
-// Function declarations
+// ==================================================
+// ONBOARD LED CONFIGURATION
+// ==================================================
+
+// Assumes two controllable onboard LEDs
+static const uint8_t HEARTBEAT_LED_PIN = 16;  // GPIO16 / D0
+static const uint8_t ACTIVITY_LED_PIN  = 2;   // GPIO2 / D4
+
+// Common onboard LEDs are active LOW
+static const uint8_t LED_ON_LEVEL  = LOW;
+static const uint8_t LED_OFF_LEVEL = HIGH;
+
+static Ticker ledTicker;
+
+
+// ==================================================
+// HEARTBEAT LED VARIABLES
+// ==================================================
+
+static volatile uint8_t heartbeatCounter = 0;
+static volatile bool heartbeatLedState = false;
+
+
+// ==================================================
+// ACTIVITY LED MODES
+// ==================================================
+
+static const uint8_t LED_MODE_OFF   = 0;
+static const uint8_t LED_MODE_SOLID = 1;
+static const uint8_t LED_MODE_FLASH = 2;
+
+static volatile uint8_t activityLedMode = LED_MODE_OFF;
+static volatile uint8_t activityFlashCount = 0;
+static volatile uint8_t activityFlashTick = 0;
+
+
+// ==================================================
+// FUNCTION DECLARATIONS
+// ==================================================
+
 static void connectWiFi();
 static void printHelp();
 
@@ -45,10 +93,261 @@ static void listEmployees();
 static void processSerialCommand(char *line);
 static void serviceSerialCommands();
 
+static void processFingerprintAttendance(
+    uint16_t fingerprintSlot
+);
 
-// --------------------------------------------------
+
+// ==================================================
+// LED TIMER CALLBACK
+// ==================================================
+
+static void ledTimerCallback()
+{
+    // ==============================================
+    // LED 1: CONTINUOUS BLINKING
+    // 500 ms ON, 500 ms OFF
+    // ==============================================
+
+    heartbeatCounter++;
+
+    if (heartbeatCounter >= 5)
+    {
+        heartbeatCounter = 0;
+
+        heartbeatLedState = !heartbeatLedState;
+
+        digitalWrite(
+            HEARTBEAT_LED_PIN,
+            heartbeatLedState ? LED_ON_LEVEL : LED_OFF_LEVEL
+        );
+    }
+
+
+    // ==============================================
+    // LED 2: ACTIVITY INDICATOR
+    // ==============================================
+
+    uint8_t mode = activityLedMode;
+
+    if (mode == LED_MODE_OFF)
+    {
+        digitalWrite(ACTIVITY_LED_PIN, LED_OFF_LEVEL);
+    }
+
+    else if (mode == LED_MODE_SOLID)
+    {
+        digitalWrite(ACTIVITY_LED_PIN, LED_ON_LEVEL);
+    }
+
+    else if (mode == LED_MODE_FLASH)
+    {
+        uint8_t count = activityFlashCount;
+        uint8_t tick = activityFlashTick;
+
+        uint8_t totalTicks = count * 4;
+
+        if (count == 0 || tick >= totalTicks)
+        {
+            digitalWrite(ACTIVITY_LED_PIN, LED_OFF_LEVEL);
+
+            activityLedMode = LED_MODE_OFF;
+            activityFlashTick = 0;
+        }
+        else
+        {
+            // 200 ms ON and 200 ms OFF
+
+            digitalWrite(
+                ACTIVITY_LED_PIN,
+                (tick % 4 < 2)
+                    ? LED_ON_LEVEL
+                    : LED_OFF_LEVEL
+            );
+
+            activityFlashTick++;
+        }
+    }
+}
+
+
+// ==================================================
+// INITIALIZE ONBOARD LEDS
+// ==================================================
+
+static void onboardLedsBegin()
+{
+    pinMode(HEARTBEAT_LED_PIN, OUTPUT);
+    pinMode(ACTIVITY_LED_PIN, OUTPUT);
+
+    // Start LED 1 blinking immediately
+    heartbeatCounter = 0;
+    heartbeatLedState = true;
+
+    digitalWrite(
+        HEARTBEAT_LED_PIN,
+        LED_ON_LEVEL
+    );
+
+    // LED 2 initially OFF
+    activityLedMode = LED_MODE_OFF;
+    activityFlashCount = 0;
+    activityFlashTick = 0;
+
+    digitalWrite(
+        ACTIVITY_LED_PIN,
+        LED_OFF_LEVEL
+    );
+
+    // Update LEDs every 100 ms
+    ledTicker.attach_ms(100, ledTimerCallback);
+
+    Serial.println("Onboard LEDs initialized.");
+    Serial.println("LED 1: Continuous heartbeat blinking.");
+    Serial.println("LED 2: Attendance activity indicator.");
+}
+
+
+// ==================================================
+// ACTIVITY LED CONTROL FUNCTIONS
+// ==================================================
+
+static void activityLedOff()
+{
+    activityFlashCount = 0;
+    activityFlashTick = 0;
+
+    activityLedMode = LED_MODE_OFF;
+}
+
+
+static void activityLedSolidOn()
+{
+    activityFlashCount = 0;
+    activityFlashTick = 0;
+
+    activityLedMode = LED_MODE_SOLID;
+}
+
+
+static void activityLedFlash(uint8_t numberOfFlashes)
+{
+    if (numberOfFlashes == 0)
+    {
+        activityLedOff();
+        return;
+    }
+
+    activityFlashTick = 0;
+    activityFlashCount = numberOfFlashes;
+
+    activityLedMode = LED_MODE_FLASH;
+}
+
+
+// ==================================================
+// PROCESS ATTENDANCE AND SHOW LED RESULT
+// ==================================================
+
+static void processFingerprintAttendance(
+    uint16_t fingerprintSlot
+)
+{
+    Serial.println();
+    Serial.println("Processing fingerprint attendance...");
+
+    // Execute existing attendance logic
+    attendanceHandleFingerprint(fingerprintSlot);
+
+
+    // Get actual attendance result
+    AttendanceResult result =
+        attendanceGetLastResult();
+
+
+    switch (result)
+    {
+        // ==========================================
+        // IN SUCCESSFULLY RECORDED
+        // ==========================================
+
+        case ATTENDANCE_RESULT_IN_RECORDED:
+
+            Serial.println("IN recorded successfully.");
+            Serial.println("LED 2: One flash.");
+
+            activityLedFlash(1);
+
+            break;
+
+
+        // ==========================================
+        // OUT SUCCESSFULLY RECORDED
+        // ==========================================
+
+        case ATTENDANCE_RESULT_OUT_RECORDED:
+
+            Serial.println("OUT recorded successfully.");
+            Serial.println("LED 2: Two flashes.");
+
+            activityLedFlash(2);
+
+            break;
+
+
+        // ==========================================
+        // UNKNOWN EMPLOYEE
+        // ==========================================
+
+        case ATTENDANCE_RESULT_UNKNOWN_EMPLOYEE:
+
+            Serial.println("Unknown employee.");
+            Serial.println("LED 2: Three flashes.");
+
+            activityLedFlash(3);
+
+            break;
+
+
+        // ==========================================
+        // ATTENDANCE ALREADY COMPLETED
+        // ==========================================
+
+        case ATTENDANCE_RESULT_ALREADY_COMPLETED:
+
+            Serial.println("Attendance already completed today.");
+
+            activityLedOff();
+
+            break;
+
+
+        // ==========================================
+        // EEPROM OR ATTENDANCE ERROR
+        // ==========================================
+
+        case ATTENDANCE_RESULT_ERROR:
+
+            Serial.println("Attendance processing error.");
+            Serial.println("LED 2: Five flashes.");
+
+            activityLedFlash(5);
+
+            break;
+
+
+        default:
+
+            activityLedOff();
+
+            break;
+    }
+}
+
+
+// ==================================================
 // CONNECT WIFI AND SYNCHRONIZE CLOCK
-// --------------------------------------------------
+// ==================================================
 
 static void connectWiFi()
 {
@@ -132,9 +431,9 @@ static void connectWiFi()
 }
 
 
-// --------------------------------------------------
+// ==================================================
 // FIND FREE EEPROM EMPLOYEE RECORD
-// --------------------------------------------------
+// ==================================================
 
 static int16_t findFreeEmployeeIndex()
 {
@@ -145,6 +444,9 @@ static int16_t findFreeEmployeeIndex()
         if (!storageReadEmployee(i, record))
         {
             Serial.println("EEPROM read error.");
+
+            activityLedFlash(5);
+
             return -1;
         }
 
@@ -158,9 +460,9 @@ static int16_t findFreeEmployeeIndex()
 }
 
 
-// --------------------------------------------------
-// FIND FREE EMPLOYEE FINGERPRINT SLOT
-// --------------------------------------------------
+// ==================================================
+// FIND FREE FINGERPRINT SLOT
+// ==================================================
 
 static int16_t findFreeFingerprintSlot()
 {
@@ -181,9 +483,9 @@ static int16_t findFreeFingerprintSlot()
 }
 
 
-// --------------------------------------------------
+// ==================================================
 // SERIAL COMMAND HELP
-// --------------------------------------------------
+// ==================================================
 
 static void printHelp()
 {
@@ -201,9 +503,9 @@ static void printHelp()
 }
 
 
-// --------------------------------------------------
+// ==================================================
 // READ EMPLOYEE NAME OR ID
-// --------------------------------------------------
+// ==================================================
 
 static bool readEmployeeInput(
     const char *prompt,
@@ -246,12 +548,14 @@ static bool readEmployeeInput(
 
                 buffer[length] = '\0';
 
+
                 // Remove trailing spaces
                 while (length > 0 &&
                        buffer[length - 1] == ' ')
                 {
                     buffer[--length] = '\0';
                 }
+
 
                 // Remove leading spaces
                 size_t first = 0;
@@ -271,6 +575,7 @@ static bool readEmployeeInput(
 
                     length -= first;
                 }
+
 
                 // Ignore blank lines
                 if (length == 0)
@@ -303,44 +608,65 @@ static bool readEmployeeInput(
 }
 
 
-// --------------------------------------------------
+// ==================================================
 // ADD NEW EMPLOYEE
-// --------------------------------------------------
+// ==================================================
 
 static void addEmployee()
 {
     if (!storageReady)
     {
         Serial.println("EEPROM is not ready.");
+
+        activityLedFlash(5);
+
         return;
     }
 
     if (!fingerprintReady)
     {
         Serial.println("R503 is not ready.");
+
+        activityLedFlash(5);
+
         return;
     }
+
 
     Serial.println();
     Serial.println("======================================");
     Serial.println("       NEW EMPLOYEE REGISTRATION");
     Serial.println("======================================");
 
+
+    // Activity LED ON during registration
+    activityLedSolidOn();
+
+
     // STEP 1: Find free EEPROM position
+
     int16_t freeIndex = findFreeEmployeeIndex();
 
     if (freeIndex < 0)
     {
         Serial.println("No free EEPROM employee record.");
+
+        activityLedFlash(5);
+
         return;
     }
 
-    // STEP 2: Find next available mapped fingerprint slot
+
+    // STEP 2: Find free fingerprint slot
+
     int16_t selectedSlot = findFreeFingerprintSlot();
 
     if (selectedSlot < 0)
     {
         Serial.println("No free fingerprint slot available.");
+
+        activityLedFlash(5);
+
         return;
     }
 
@@ -349,7 +675,9 @@ static void addEmployee()
     Serial.print("Selected fingerprint slot: ");
     Serial.println(fingerprintSlot);
 
-    // STEP 3: Capture new employee fingerprint
+
+    // STEP 3: Fingerprint enrollment
+
     Serial.println();
     Serial.println("FINGERPRINT ENROLLMENT STARTED.");
     Serial.println("Follow the R503 sensor instructions.");
@@ -358,7 +686,8 @@ static void addEmployee()
     {
         Serial.println();
         Serial.println("Fingerprint enrollment failed.");
-        Serial.println("No employee details were requested.");
+
+        activityLedFlash(5);
 
         return;
     }
@@ -366,7 +695,9 @@ static void addEmployee()
     Serial.println();
     Serial.println("Fingerprint saved successfully in R503.");
 
-    // STEP 4: Ask employee name
+
+    // STEP 4: Employee name
+
     char employeeName[24] = {0};
 
     if (!readEmployeeInput(
@@ -376,11 +707,21 @@ static void addEmployee()
     {
         Serial.println("Registration cancelled.");
 
-        fingerprintDelete(fingerprintSlot);
+        if (!fingerprintDelete(fingerprintSlot))
+        {
+            activityLedFlash(5);
+        }
+        else
+        {
+            activityLedOff();
+        }
+
         return;
     }
 
-    // STEP 5: Ask employee ID
+
+    // STEP 5: Employee ID
+
     char employeeId[16] = {0};
 
     if (!readEmployeeInput(
@@ -390,20 +731,40 @@ static void addEmployee()
     {
         Serial.println("Registration cancelled.");
 
-        fingerprintDelete(fingerprintSlot);
+        if (!fingerprintDelete(fingerprintSlot))
+        {
+            activityLedFlash(5);
+        }
+        else
+        {
+            activityLedOff();
+        }
+
         return;
     }
 
+
     // STEP 6: Check duplicate employee ID
+
     if (storageFindEmployeeById(employeeId) >= 0)
     {
         Serial.println("This employee ID already exists.");
 
-        fingerprintDelete(fingerprintSlot);
+        if (!fingerprintDelete(fingerprintSlot))
+        {
+            activityLedFlash(5);
+        }
+        else
+        {
+            activityLedOff();
+        }
+
         return;
     }
 
+
     // STEP 7: Prepare EEPROM record
+
     EmployeeRecord record = {};
 
     record.active = 1;
@@ -421,20 +782,28 @@ static void addEmployee()
         sizeof(record.employeeId) - 1
     );
 
+
     // STEP 8: Save employee details
+
     if (!storageWriteEmployee(
             (uint16_t)freeIndex,
             record))
     {
         Serial.println("EEPROM write failed.");
 
-        // Remove fingerprint if employee data could not be saved
-        fingerprintDelete(fingerprintSlot);
+        if (!fingerprintDelete(fingerprintSlot))
+        {
+            Serial.println("Fingerprint cleanup also failed.");
+        }
+
+        activityLedFlash(5);
 
         return;
     }
 
+
     // STEP 9: Registration successful
+
     Serial.println();
     Serial.println("======================================");
     Serial.println("   EMPLOYEE REGISTERED SUCCESSFULLY");
@@ -453,12 +822,16 @@ static void addEmployee()
     Serial.println("Employee Details : Saved in EEPROM");
 
     Serial.println("======================================");
+
+
+    // Registration complete
+    activityLedOff();
 }
 
 
-// --------------------------------------------------
+// ==================================================
 // DELETE EMPLOYEE
-// --------------------------------------------------
+// ==================================================
 
 static void deleteEmployee(char *slotText)
 {
@@ -481,14 +854,21 @@ static void deleteEmployee(char *slotText)
         slotValue > MAX_FINGERPRINT_SLOTS)
     {
         Serial.println("Invalid fingerprint slot.");
+
         return;
     }
 
     if (!storageReady || !fingerprintReady)
     {
         Serial.println("EEPROM or R503 is not ready.");
+
+        activityLedFlash(5);
+
         return;
     }
+
+
+    // Find employee
 
     int16_t employeeIndex =
         storageFindEmployeeByFingerprint(
@@ -498,32 +878,46 @@ static void deleteEmployee(char *slotText)
     if (employeeIndex < 0)
     {
         Serial.println("Employee not found.");
+
+        activityLedFlash(3);
+
         return;
     }
 
-    // Delete fingerprint from R503 first
+
+    // Delete fingerprint from R503
+
     if (!fingerprintDelete((uint16_t)slotValue))
     {
         Serial.println("Fingerprint deletion failed.");
+
+        activityLedFlash(5);
+
         return;
     }
 
-    // Delete mapping from EEPROM
+
+    // Delete employee mapping from EEPROM
+
     if (storageDeleteEmployee((uint16_t)employeeIndex))
     {
         Serial.println("Employee deleted successfully.");
+
+        activityLedFlash(1);
     }
     else
     {
         Serial.println("EEPROM deletion failed.");
         Serial.println("Check employee record manually.");
+
+        activityLedFlash(5);
     }
 }
 
 
-// --------------------------------------------------
+// ==================================================
 // LIST REGISTERED EMPLOYEES
-// --------------------------------------------------
+// ==================================================
 
 static void listEmployees()
 {
@@ -537,11 +931,15 @@ static void listEmployees()
     Serial.println("SLOT | EMPLOYEE ID | EMPLOYEE NAME");
     Serial.println("--------------------------------------");
 
+
     for (uint16_t i = 0; i < MAX_EMPLOYEES; i++)
     {
         if (!storageReadEmployee(i, record))
         {
             Serial.println("EEPROM read error.");
+
+            activityLedFlash(5);
+
             return;
         }
 
@@ -561,19 +959,22 @@ static void listEmployees()
 }
 
 
-// --------------------------------------------------
+// ==================================================
 // PROCESS SERIAL COMMAND
-// --------------------------------------------------
+// ==================================================
 
 static void processSerialCommand(char *line)
 {
     // Remove leading spaces
+
     while (*line == ' ' || *line == '\t')
     {
         line++;
     }
 
+
     // Remove trailing spaces
+
     size_t length = strlen(line);
 
     while (length > 0 &&
@@ -583,19 +984,25 @@ static void processSerialCommand(char *line)
         line[--length] = '\0';
     }
 
+
     if (strcmp(line, "ADD") == 0)
     {
         Serial.println();
-        Serial.println("Staring employee registration...");
+        Serial.println("Starting employee registration...");
 
         addEmployee();
+
         Serial.println();
-        Serial.println("Returing to fingerprint attendance mode...");        printHelp();
+        Serial.println("Returning to fingerprint attendance mode...");
+
+        printHelp();
     }
+
     else if (strncmp(line, "DEL,", 4) == 0)
     {
         deleteEmployee(line + 4);
     }
+
     else if (strcmp(line, "LIST") == 0)
     {
         if (storageReady)
@@ -605,12 +1012,16 @@ static void processSerialCommand(char *line)
         else
         {
             Serial.println("EEPROM not ready.");
+
+            activityLedFlash(5);
         }
     }
+
     else if (strcmp(line, "HELP") == 0)
     {
         printHelp();
     }
+
     else if (line[0] != '\0')
     {
         Serial.println("Unknown command. Type HELP.");
@@ -618,9 +1029,9 @@ static void processSerialCommand(char *line)
 }
 
 
-// --------------------------------------------------
+// ==================================================
 // RECEIVE SERIAL COMMANDS
-// --------------------------------------------------
+// ==================================================
 
 static void serviceSerialCommands()
 {
@@ -634,6 +1045,7 @@ static void serviceSerialCommands()
             {
                 Serial.println("Serial command too long.");
             }
+
             else if (serialLineLength > 0)
             {
                 serialLine[serialLineLength] = '\0';
@@ -644,6 +1056,7 @@ static void serviceSerialCommands()
             serialLineLength = 0;
             serialLineOverflow = false;
         }
+
         else
         {
             if (serialLineLength < sizeof(serialLine) - 1)
@@ -659,13 +1072,18 @@ static void serviceSerialCommands()
 }
 
 
-// --------------------------------------------------
+// ==================================================
 // SETUP
-// --------------------------------------------------
+// ==================================================
 
 void setup()
 {
     Serial.begin(115200);
+
+    delay(100);
+
+    // Initialize onboard LEDs first
+    onboardLedsBegin();
 
     delay(300);
 
@@ -674,7 +1092,11 @@ void setup()
     Serial.println(" ESP8266 FINGERPRINT ATTENDANCE SYSTEM");
     Serial.println("======================================");
 
-    // Initialize EEPROM
+
+    // ==============================================
+    // INITIALIZE EEPROM
+    // ==============================================
+
     Serial.println();
     Serial.println("Initializing AT24C256...");
 
@@ -687,9 +1109,15 @@ void setup()
     else
     {
         Serial.println("EEPROM initialization failed.");
+
+        activityLedFlash(5);
     }
 
-    // Initialize fingerprint sensor
+
+    // ==============================================
+    // INITIALIZE FINGERPRINT SENSOR
+    // ==============================================
+
     Serial.println();
     Serial.println("Initializing R503...");
 
@@ -702,13 +1130,41 @@ void setup()
     else
     {
         Serial.println("Fingerprint sensor initialization failed.");
+
+        activityLedFlash(5);
     }
 
-    // Wi-Fi and clock
+
+    // ==============================================
+    // SYSTEM INITIALIZATION STATUS
+    // ==============================================
+
+    if (!storageReady || !fingerprintReady)
+    {
+        Serial.println("SYSTEM ERROR: Check EEPROM or R503.");
+
+        activityLedFlash(5);
+    }
+    else
+    {
+        Serial.println("All hardware initialized successfully.");
+
+        activityLedOff();
+    }
+
+
+    // ==============================================
+    // WIFI AND CLOCK
+    // ==============================================
+
     Serial.println();
     connectWiFi();
 
-    // Start website
+
+    // ==============================================
+    // START WEBSITE
+    // ==============================================
+
     Serial.println();
     Serial.println("Starting attendance website...");
 
@@ -716,41 +1172,94 @@ void setup()
 
     Serial.println("Website server started.");
 
-    // Show commands
+
+    // Display commands
     printHelp();
 }
 
 
-// --------------------------------------------------
+// ==================================================
 // MAIN LOOP
-// --------------------------------------------------
-
-
-
+// ==================================================
 
 void loop()
 {
-    // Keep website active
+    // Handle website clients
     webServerHandleClient();
+
 
     // Process serial commands
     serviceSerialCommands();
 
-    // Continuously check R503
-    uint16_t matchedSlot = 0;
 
-    if (fingerprintIdentify(matchedSlot))
+    // ==============================================
+    // FINGERPRINT SCANNING
+    // ==============================================
+
+    if (fingerprintReady)
     {
-        Serial.println("Valid employee fingerprint detected.");
+        uint16_t matchedSlot = 0;
 
-        // Save IN or OUT attendance
-        attendanceHandleFingerprint(matchedSlot);
+        bool matched =
+            fingerprintIdentify(matchedSlot);
+
+
+        if (matched)
+        {
+            Serial.println();
+            Serial.println("Registered fingerprint detected.");
+
+            // Process IN or OUT attendance
+            processFingerprintAttendance(matchedSlot);
+        }
+        else
+        {
+            // Check why fingerprintIdentify returned false
+            FingerprintScanStatus scanStatus =
+                fingerprintGetLastScanStatus();
+
+
+            switch (scanStatus)
+            {
+                // UNKNOWN FINGERPRINT
+                case FINGERPRINT_SCAN_UNKNOWN:
+
+                    Serial.println(
+                        "Unknown fingerprint - 3 flashes."
+                    );
+
+                    activityLedFlash(3);
+
+                    break;
+
+
+                // R503 COMMUNICATION OR SENSOR ERROR
+                case FINGERPRINT_SCAN_ERROR:
+
+                    Serial.println(
+                        "Fingerprint sensor error - 5 flashes."
+                    );
+
+                    activityLedFlash(5);
+
+                    break;
+
+
+                // NO FINGER OR WAITING FOR REMOVAL
+                case FINGERPRINT_SCAN_IDLE:
+
+                case FINGERPRINT_SCAN_MATCH:
+
+                default:
+
+                    break;
+            }
+        }
     }
 
-    // Continue handling website requests
+
+    // Handle website clients again
     webServerHandleClient();
 
     delay(20);
 }
-
-
