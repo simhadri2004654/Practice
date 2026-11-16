@@ -16,8 +16,6 @@ static SoftwareSerial fingerprintSerial(
     FINGERPRINT_TX_PIN
 );
 
-
-// Fingerprint sensor object
 static Adafruit_Fingerprint finger(&fingerprintSerial);
 
 
@@ -25,11 +23,21 @@ static Adafruit_Fingerprint finger(&fingerprintSerial);
 // INTERNAL VARIABLES
 // ==================================================
 
-// Attendance scanner waits for finger removal
 static bool attendanceWaitingForRemoval = false;
 
+static uint32_t lastFingerprintPollMs = 0;
+static uint32_t lastCommunicationMessageMs = 0;
+static uint32_t lastCommunicationLedMs = 0;
+static uint32_t lastSensorErrorMessageMs = 0;
 
-// Internal helper functions
+static FingerprintScanStatus lastScanStatus =
+    FINGERPRINT_SCAN_IDLE;
+
+
+// ==================================================
+// FUNCTION PROTOTYPES
+// ==================================================
+
 static bool waitForFinger(
     uint32_t timeoutMs,
     const char *message
@@ -37,10 +45,65 @@ static bool waitForFinger(
 
 static bool waitForFingerRemoval(uint32_t timeoutMs);
 
+static void fingerprintSetErrorLight();
+
+static void printCommunicationError(const char *message);
+
+static bool communicationErrorLedDue();
+
 
 // ==================================================
-// WAIT FOR FINGER TO BE PLACED
-// Used during enrollment
+// R503 ERROR LED
+// ==================================================
+
+static void fingerprintSetErrorLight()
+{
+    finger.LEDcontrol(
+        FINGERPRINT_LED_FLASHING,
+        30,
+        FINGERPRINT_LED_RED,
+        3
+    );
+}
+
+
+// ==================================================
+// COMMUNICATION ERROR MESSAGE
+// ==================================================
+
+static void printCommunicationError(const char *message)
+{
+    uint32_t currentTime = millis();
+
+    if ((uint32_t)(currentTime - lastCommunicationMessageMs) >= 2000)
+    {
+        Serial.println(message);
+
+        lastCommunicationMessageMs = currentTime;
+    }
+}
+
+
+// ==================================================
+// COMMUNICATION ERROR INDICATION INTERVAL
+// ==================================================
+
+static bool communicationErrorLedDue()
+{
+    uint32_t currentTime = millis();
+
+    if ((uint32_t)(currentTime - lastCommunicationLedMs) >= 2000)
+    {
+        lastCommunicationLedMs = currentTime;
+        return true;
+    }
+
+    return false;
+}
+
+
+// ==================================================
+// WAIT FOR FINGER PLACEMENT
 // ==================================================
 
 static bool waitForFinger(
@@ -68,7 +131,18 @@ static bool waitForFinger(
             continue;
         }
 
-        Serial.print("Fingerprint image communication/error code: 0x");
+        if (response == FINGERPRINT_PACKETRECIEVEERR)
+        {
+            printCommunicationError(
+                "R503 communication error during enrollment."
+            );
+
+            delay(50);
+            yield();
+            continue;
+        }
+
+        Serial.print("Fingerprint capture error: 0x");
         Serial.println(response, HEX);
 
         return false;
@@ -81,8 +155,7 @@ static bool waitForFinger(
 
 
 // ==================================================
-// WAIT FOR FINGER TO BE REMOVED
-// Used during enrollment only
+// WAIT FOR FINGER REMOVAL
 // ==================================================
 
 static bool waitForFingerRemoval(uint32_t timeoutMs)
@@ -108,6 +181,17 @@ static bool waitForFingerRemoval(uint32_t timeoutMs)
             continue;
         }
 
+        if (response == FINGERPRINT_PACKETRECIEVEERR)
+        {
+            printCommunicationError(
+                "R503 communication error while removing finger."
+            );
+
+            delay(50);
+            yield();
+            continue;
+        }
+
         Serial.print("Sensor response while removing finger: 0x");
         Serial.println(response, HEX);
 
@@ -126,17 +210,25 @@ static bool waitForFingerRemoval(uint32_t timeoutMs)
 
 bool fingerprintBegin()
 {
+    Serial.println();
     Serial.println("Starting R503 fingerprint sensor...");
 
-    fingerprintSerial.begin(FINGERPRINT_BAUD);
+    attendanceWaitingForRemoval = false;
+
+    lastScanStatus = FINGERPRINT_SCAN_IDLE;
+
+    lastFingerprintPollMs = millis();
+
+    lastCommunicationMessageMs = 0;
+
+    lastCommunicationLedMs = millis() - 2000UL;
+
+    lastSensorErrorMessageMs = 0;
 
     finger.begin(FINGERPRINT_BAUD);
 
     delay(100);
 
-    attendanceWaitingForRemoval = false;
-
-    // Verify sensor communication/password
     if (!finger.verifyPassword())
     {
         Serial.println("R503 communication failed.");
@@ -147,7 +239,6 @@ bool fingerprintBegin()
 
     Serial.println("R503 communication successful.");
 
-    // Read sensor parameters
     uint8_t response = finger.getParameters();
 
     if (response != FINGERPRINT_OK)
@@ -173,7 +264,7 @@ bool fingerprintBegin()
 
 
 // ==================================================
-// SET IDLE LED
+// R503 BLUE BREATHING LED: IDLE
 // ==================================================
 
 void fingerprintSetIdleLight()
@@ -189,7 +280,6 @@ void fingerprintSetIdleLight()
 
 // ==================================================
 // ENROLL NEW FINGERPRINT
-// NO SEARCH COMMAND DURING ENROLLMENT
 // ==================================================
 
 bool fingerprintEnroll(uint16_t slotId)
@@ -204,14 +294,16 @@ bool fingerprintEnroll(uint16_t slotId)
     Serial.print("Fingerprint slot: ");
     Serial.println(slotId);
 
-    // Check slot number
+    lastScanStatus = FINGERPRINT_SCAN_IDLE;
+
     if (slotId == 0 || slotId > finger.capacity)
     {
         Serial.println("Invalid fingerprint slot.");
+        fingerprintSetIdleLight();
         return false;
     }
 
-    // Start blinking LED
+    // Blue flashing during enrollment
     finger.LEDcontrol(
         FINGERPRINT_LED_FLASHING,
         40,
@@ -219,21 +311,25 @@ bool fingerprintEnroll(uint16_t slotId)
         0
     );
 
-    // STEP 1: Capture first fingerprint
+
+    // STEP 1: First fingerprint capture
+
     if (!waitForFinger(
             30000,
             "Place the employee's finger on the sensor."))
     {
         Serial.println("First fingerprint capture failed.");
-
         fingerprintSetIdleLight();
-
         return false;
     }
 
+    attendanceWaitingForRemoval = true;
+
     Serial.println("First fingerprint captured.");
 
-    // STEP 2: Convert first fingerprint image
+
+    // STEP 2: Process first image
+
     response = finger.image2Tz(1);
 
     if (response != FINGERPRINT_OK)
@@ -241,36 +337,42 @@ bool fingerprintEnroll(uint16_t slotId)
         Serial.print("First fingerprint processing failed: 0x");
         Serial.println(response, HEX);
 
-        fingerprintSetIdleLight();
-
+        fingerprintSetErrorLight();
         return false;
     }
 
     Serial.println("First fingerprint processed.");
 
-    // STEP 3: Wait for finger removal
+
+    // STEP 3: Remove finger
+
     if (!waitForFingerRemoval(15000))
     {
-        fingerprintSetIdleLight();
-
+        fingerprintSetErrorLight();
         return false;
     }
 
-    // STEP 4: Capture second fingerprint
+    attendanceWaitingForRemoval = false;
+
+
+    // STEP 4: Second fingerprint capture
+
     if (!waitForFinger(
             30000,
             "Place the SAME finger again."))
     {
         Serial.println("Second fingerprint capture failed.");
-
         fingerprintSetIdleLight();
-
         return false;
     }
 
+    attendanceWaitingForRemoval = true;
+
     Serial.println("Second fingerprint captured.");
 
-    // STEP 5: Convert second fingerprint image
+
+    // STEP 5: Process second image
+
     response = finger.image2Tz(2);
 
     if (response != FINGERPRINT_OK)
@@ -278,18 +380,15 @@ bool fingerprintEnroll(uint16_t slotId)
         Serial.print("Second fingerprint processing failed: 0x");
         Serial.println(response, HEX);
 
-        // Do not allow attendance scanning until
-        // the currently placed finger is removed.
-        attendanceWaitingForRemoval = true;
-
-        fingerprintSetIdleLight();
-
+        fingerprintSetErrorLight();
         return false;
     }
 
     Serial.println("Second fingerprint processed.");
 
-    // STEP 6: Compare both fingerprint images
+
+    // STEP 6: Compare both captures
+
     Serial.println("Comparing both fingerprint captures...");
 
     response = finger.createModel();
@@ -299,19 +398,7 @@ bool fingerprintEnroll(uint16_t slotId)
         Serial.println("Fingerprint mismatch!");
         Serial.println("Please use the same finger again.");
 
-        attendanceWaitingForRemoval = true;
-
-        finger.LEDcontrol(
-            FINGERPRINT_LED_FLASHING,
-            30,
-            FINGERPRINT_LED_RED,
-            3
-        );
-
-        delay(500);
-
-        fingerprintSetIdleLight();
-
+        fingerprintSetErrorLight();
         return false;
     }
 
@@ -320,16 +407,15 @@ bool fingerprintEnroll(uint16_t slotId)
         Serial.print("Fingerprint model creation error: 0x");
         Serial.println(response, HEX);
 
-        attendanceWaitingForRemoval = true;
-
-        fingerprintSetIdleLight();
-
+        fingerprintSetErrorLight();
         return false;
     }
 
     Serial.println("Fingerprint matching successful.");
 
-    // STEP 7: Save fingerprint model in R503
+
+    // STEP 7: Save fingerprint in R503
+
     Serial.println("Saving fingerprint in R503 library...");
 
     response = finger.storeModel(slotId);
@@ -339,14 +425,13 @@ bool fingerprintEnroll(uint16_t slotId)
         Serial.print("Fingerprint storage failed: 0x");
         Serial.println(response, HEX);
 
-        attendanceWaitingForRemoval = true;
-
-        fingerprintSetIdleLight();
-
+        fingerprintSetErrorLight();
         return false;
     }
 
-    // STEP 8: Registration successful
+
+    // STEP 8: Enrollment successful
+
     Serial.println();
     Serial.println("================================");
     Serial.println("FINGERPRINT SAVED SUCCESSFULLY");
@@ -355,8 +440,6 @@ bool fingerprintEnroll(uint16_t slotId)
     Serial.print("Saved fingerprint slot: ");
     Serial.println(slotId);
 
-    // Require removal before the attendance scanner
-    // can recognize another fingerprint.
     attendanceWaitingForRemoval = true;
 
     finger.LEDcontrol(
@@ -375,24 +458,41 @@ bool fingerprintEnroll(uint16_t slotId)
 
 
 // ==================================================
+// GET LAST FINGERPRINT SCAN STATUS
+// ==================================================
+
+FingerprintScanStatus fingerprintGetLastScanStatus()
+{
+    return lastScanStatus;
+}
+
+
+// ==================================================
 // IDENTIFY FINGERPRINT FOR ATTENDANCE
-//
-// Uses STANDARD fingerSearch(1).
-// Does NOT use fingerFastSearch().
-//
-// Non-blocking finger-removal detection.
 // ==================================================
 
 bool fingerprintIdentify(uint16_t &matchedSlotId)
 {
     matchedSlotId = 0;
 
+    lastScanStatus = FINGERPRINT_SCAN_IDLE;
+
+    uint32_t currentTime = millis();
+
     uint8_t response;
 
 
-    // ==============================================
-    // WAIT UNTIL THE PREVIOUS FINGER IS REMOVED
-    // ==============================================
+    // Poll every 100 ms
+
+    if ((uint32_t)(currentTime - lastFingerprintPollMs) < 100)
+    {
+        return false;
+    }
+
+    lastFingerprintPollMs = currentTime;
+
+
+    // WAIT FOR PREVIOUS FINGER REMOVAL
 
     if (attendanceWaitingForRemoval)
     {
@@ -402,21 +502,41 @@ bool fingerprintIdentify(uint16_t &matchedSlotId)
         {
             attendanceWaitingForRemoval = false;
 
+            Serial.println();
             Serial.println("Finger removed successfully.");
             Serial.println("Scanner ready for next fingerprint.");
 
             fingerprintSetIdleLight();
         }
+        else if (response == FINGERPRINT_PACKETRECIEVEERR)
+        {
+            printCommunicationError(
+                "R503 UART communication error while waiting for finger removal."
+            );
 
-        // Do not search again while the same finger
-        // is still placed on the sensor.
+            if (communicationErrorLedDue())
+            {
+                lastScanStatus = FINGERPRINT_SCAN_ERROR;
+            }
+        }
+        else if (response != FINGERPRINT_OK)
+        {
+            if ((uint32_t)(currentTime - lastSensorErrorMessageMs) >= 2000)
+            {
+                Serial.print("Sensor removal-check error: 0x");
+                Serial.println(response, HEX);
+
+                lastSensorErrorMessageMs = currentTime;
+            }
+
+            lastScanStatus = FINGERPRINT_SCAN_ERROR;
+        }
+
         return false;
     }
 
 
-    // ==============================================
-    // STEP 1: CAPTURE FINGERPRINT IMAGE
-    // ==============================================
+    // CAPTURE FINGERPRINT IMAGE
 
     response = finger.getImage();
 
@@ -425,67 +545,125 @@ bool fingerprintIdentify(uint16_t &matchedSlotId)
         return false;
     }
 
-    if (response != FINGERPRINT_OK)
+
+    // UART communication error
+
+    if (response == FINGERPRINT_PACKETRECIEVEERR)
     {
-        Serial.print("Attendance image error: 0x");
-        Serial.println(response, HEX);
+        printCommunicationError(
+            "R503 UART communication error. Check sensor wiring and power."
+        );
+
+        if (communicationErrorLedDue())
+        {
+            lastScanStatus = FINGERPRINT_SCAN_ERROR;
+        }
 
         return false;
     }
 
 
-    // Finger has been detected.
-    // Lock scanning until this finger is removed.
-    attendanceWaitingForRemoval = true;
+    // Other image capture error
 
+    if (response != FINGERPRINT_OK)
+    {
+        Serial.print("Fingerprint image capture error: 0x");
+        Serial.println(response, HEX);
+
+        attendanceWaitingForRemoval = true;
+
+        lastScanStatus = FINGERPRINT_SCAN_ERROR;
+
+        fingerprintSetErrorLight();
+
+        return false;
+    }
+
+
+    attendanceWaitingForRemoval = true;
 
     Serial.println();
     Serial.println("Fingerprint detected.");
 
 
-    // ==============================================
-    // STEP 2: CONVERT FINGERPRINT IMAGE
-    // ==============================================
+    // PROCESS IMAGE
 
     response = finger.image2Tz(1);
 
     if (response != FINGERPRINT_OK)
     {
-        Serial.print("Attendance fingerprint processing error: 0x");
+        Serial.print("Fingerprint processing error: 0x");
         Serial.println(response, HEX);
+
+        if (response == FINGERPRINT_PACKETRECIEVEERR)
+        {
+            printCommunicationError(
+                "R503 UART error during fingerprint processing."
+            );
+        }
+
+        lastScanStatus = FINGERPRINT_SCAN_ERROR;
+
+        fingerprintSetErrorLight();
 
         return false;
     }
 
 
-    // ==============================================
-    // STEP 3: SEARCH SAVED FINGERPRINT LIBRARY
-    // ==============================================
+    // SEARCH LIBRARY
 
-    // Standard search command for R503 compatibility
     response = finger.fingerSearch(1);
 
 
+    // UNKNOWN FINGERPRINT
+
     if (response == FINGERPRINT_NOTFOUND)
     {
-        Serial.println("Fingerprint not registered.");
+        Serial.println();
+        Serial.println("UNKNOWN FINGERPRINT!");
+        Serial.println("Access denied.");
+
+        lastScanStatus = FINGERPRINT_SCAN_UNKNOWN;
+
+        fingerprintSetErrorLight();
 
         return false;
     }
 
+
+    // SEARCH COMMUNICATION ERROR
+
+    if (response == FINGERPRINT_PACKETRECIEVEERR)
+    {
+        printCommunicationError(
+            "R503 UART error during fingerprint search."
+        );
+
+        if (communicationErrorLedDue())
+        {
+            lastScanStatus = FINGERPRINT_SCAN_ERROR;
+        }
+
+        return false;
+    }
+
+
+    // OTHER SEARCH ERROR
 
     if (response != FINGERPRINT_OK)
     {
-        Serial.print("Fingerprint search communication error: 0x");
+        Serial.print("Fingerprint search error: 0x");
         Serial.println(response, HEX);
+
+        lastScanStatus = FINGERPRINT_SCAN_ERROR;
+
+        fingerprintSetErrorLight();
 
         return false;
     }
 
 
-    // ==============================================
-    // STEP 4: MATCHING FINGERPRINT FOUND
-    // ==============================================
+    // REGISTERED FINGERPRINT FOUND
 
     matchedSlotId = finger.fingerID;
 
@@ -500,19 +678,15 @@ bool fingerprintIdentify(uint16_t &matchedSlotId)
     Serial.print("Confidence: ");
     Serial.println(finger.confidence);
 
+    lastScanStatus = FINGERPRINT_SCAN_MATCH;
 
-    // Blink purple LED for successful identification
+    // Purple flashing for successful recognition
     finger.LEDcontrol(
         FINGERPRINT_LED_FLASHING,
         30,
         FINGERPRINT_LED_PURPLE,
         2
     );
-
-
-    // Do not wait here for finger removal.
-    // The next calls to fingerprintIdentify()
-    // will check for removal without blocking.
 
     return true;
 }
@@ -527,7 +701,6 @@ bool fingerprintDelete(uint16_t slotId)
     if (slotId == 0 || slotId > finger.capacity)
     {
         Serial.println("Invalid fingerprint slot.");
-
         return false;
     }
 

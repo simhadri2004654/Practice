@@ -6,7 +6,15 @@
 #include <time.h>
 
 
-// Generate date key in YYYYMMDD format
+// Latest attendance result
+static AttendanceResult lastAttendanceResult =
+    ATTENDANCE_RESULT_NONE;
+
+
+// ==================================================
+// GENERATE DATE KEY: YYYYMMDD
+// ==================================================
+
 static uint32_t makeDayKey(const struct tm &localTime)
 {
     return
@@ -16,7 +24,10 @@ static uint32_t makeDayKey(const struct tm &localTime)
 }
 
 
-// Print local date and time
+// ==================================================
+// PRINT LOCAL DATE AND TIME
+// ==================================================
+
 static void printLocalTime(
     const char *label,
     uint32_t epoch
@@ -46,7 +57,10 @@ static void printLocalTime(
 }
 
 
-// Print employee information
+// ==================================================
+// PRINT EMPLOYEE INFORMATION
+// ==================================================
+
 static void printEmployee(const EmployeeRecord &employee)
 {
     Serial.print("Employee Name: ");
@@ -57,9 +71,25 @@ static void printEmployee(const EmployeeRecord &employee)
 }
 
 
-// Process employee fingerprint attendance
+// ==================================================
+// GET LAST ATTENDANCE RESULT
+// ==================================================
+
+AttendanceResult attendanceGetLastResult()
+{
+    return lastAttendanceResult;
+}
+
+
+// ==================================================
+// PROCESS EMPLOYEE FINGERPRINT ATTENDANCE
+// ==================================================
+
 void attendanceHandleFingerprint(uint16_t fingerprintSlot)
 {
+    // Assume an error until a result is confirmed
+    lastAttendanceResult = ATTENDANCE_RESULT_ERROR;
+
     Serial.println();
     Serial.println("================================");
     Serial.println("FINGERPRINT ATTENDANCE");
@@ -69,7 +99,10 @@ void attendanceHandleFingerprint(uint16_t fingerprintSlot)
     Serial.println(fingerprintSlot);
 
 
-    // Validate fingerprint slot
+    // ==============================================
+    // VALIDATE FINGERPRINT SLOT
+    // ==============================================
+
     if (fingerprintSlot == 0)
     {
         Serial.println("Invalid fingerprint slot.");
@@ -77,10 +110,12 @@ void attendanceHandleFingerprint(uint16_t fingerprintSlot)
     }
 
 
-    // Find employee using fingerprint slot
+    // ==============================================
+    // FIND EMPLOYEE USING FINGERPRINT SLOT
+    // ==============================================
+
     const int16_t employeeIndex =
         storageFindEmployeeByFingerprint(fingerprintSlot);
-
 
     if (employeeIndex < 0)
     {
@@ -88,12 +123,18 @@ void attendanceHandleFingerprint(uint16_t fingerprintSlot)
             "Unknown fingerprint. Employee is not registered."
         );
 
+        lastAttendanceResult =
+            ATTENDANCE_RESULT_UNKNOWN_EMPLOYEE;
+
         return;
     }
 
 
-    // Read employee information
-    EmployeeRecord employee;
+    // ==============================================
+    // READ EMPLOYEE INFORMATION
+    // ==============================================
+
+    EmployeeRecord employee = {};
 
     if (!storageReadEmployee(employeeIndex, employee))
     {
@@ -104,14 +145,20 @@ void attendanceHandleFingerprint(uint16_t fingerprintSlot)
     if (!employee.active)
     {
         Serial.println("Employee is inactive.");
+
+        lastAttendanceResult =
+            ATTENDANCE_RESULT_UNKNOWN_EMPLOYEE;
+
         return;
     }
-
 
     printEmployee(employee);
 
 
-    // Get current time
+    // ==============================================
+    // GET CURRENT TIME
+    // ==============================================
+
     const time_t now = time(nullptr);
 
     if (now < 1700000000)
@@ -123,7 +170,6 @@ void attendanceHandleFingerprint(uint16_t fingerprintSlot)
         return;
     }
 
-
     struct tm localTime;
 
     if (localtime_r(&now, &localTime) == nullptr)
@@ -132,25 +178,35 @@ void attendanceHandleFingerprint(uint16_t fingerprintSlot)
         return;
     }
 
-
     const uint32_t todayKey =
         makeDayKey(localTime);
 
     const uint32_t nowEpoch =
         (uint32_t)now;
 
-
     Serial.print("Today's Date Key: ");
     Serial.println(todayKey);
 
 
-    // Get attendance log information
+    // ==============================================
+    // GET ATTENDANCE LOG INFORMATION
+    // ==============================================
+
     const uint16_t recordCount =
         storageAttendanceCount();
 
     const uint16_t nextIndex =
         storageNextAttendance();
 
+    // Validate circular-buffer information
+    if (
+        recordCount > MAX_ATTENDANCE_RECORDS ||
+        nextIndex >= MAX_ATTENDANCE_RECORDS
+    )
+    {
+        Serial.println("Invalid EEPROM attendance pointer.");
+        return;
+    }
 
     const uint16_t oldestIndex =
         (recordCount == MAX_ATTENDANCE_RECORDS)
@@ -158,46 +214,35 @@ void attendanceHandleFingerprint(uint16_t fingerprintSlot)
         : 0;
 
 
-    // Search today's attendance record for this employee
-    for (
-        uint16_t i = 0;
-        i < recordCount;
-        i++
-    )
+    // ==============================================
+    // SEARCH TODAY'S RECORD FOR THIS EMPLOYEE
+    // ==============================================
+
+    for (uint16_t i = 0; i < recordCount; i++)
     {
         const uint16_t index =
             (oldestIndex + i) % MAX_ATTENDANCE_RECORDS;
 
-
-        AttendanceRecord record;
-
+        AttendanceRecord record = {};
 
         if (!storageReadAttendance(index, record))
         {
-            Serial.println(
-                "EEPROM attendance read error."
-            );
-
+            Serial.println("EEPROM attendance read error.");
             return;
         }
 
-
-        // Check whether this record belongs to the employee today
         if (
             record.active &&
             record.employeeIndex == (uint8_t)employeeIndex &&
             record.dayKey == todayKey
         )
         {
-
-            // =========================================
+            // ======================================
             // SECOND SCAN: RECORD OUT TIME
-            // =========================================
+            // ======================================
 
             if (record.outEpoch == 0)
             {
-
-                // Prevent invalid negative duration
                 if (nowEpoch < record.inEpoch)
                 {
                     Serial.println(
@@ -206,7 +251,6 @@ void attendanceHandleFingerprint(uint16_t fingerprintSlot)
 
                     return;
                 }
-
 
                 record.outEpoch = nowEpoch;
 
@@ -220,7 +264,6 @@ void attendanceHandleFingerprint(uint16_t fingerprintSlot)
 
                     return;
                 }
-
 
                 const uint32_t duration =
                     record.outEpoch - record.inEpoch;
@@ -255,13 +298,15 @@ void attendanceHandleFingerprint(uint16_t fingerprintSlot)
                     "Attendance updated in EEPROM."
                 );
 
+                // Report successful OUT
+                lastAttendanceResult =
+                    ATTENDANCE_RESULT_OUT_RECORDED;
             }
             else
             {
-
-                // =====================================
+                // ==================================
                 // THIRD OR LATER SCAN: IGNORE
-                // =====================================
+                // ==================================
 
                 Serial.println(
                     "Attendance already completed today."
@@ -280,6 +325,8 @@ void attendanceHandleFingerprint(uint16_t fingerprintSlot)
                     record.outEpoch
                 );
 
+                lastAttendanceResult =
+                    ATTENDANCE_RESULT_ALREADY_COMPLETED;
             }
 
             return;
@@ -287,9 +334,9 @@ void attendanceHandleFingerprint(uint16_t fingerprintSlot)
     }
 
 
-    // =============================================
+    // ==============================================
     // FIRST SCAN: CREATE IN RECORD
-    // =============================================
+    // ==============================================
 
     AttendanceRecord newRecord = {};
 
@@ -311,6 +358,12 @@ void attendanceHandleFingerprint(uint16_t fingerprintSlot)
     // Get next EEPROM attendance location
     const uint16_t writeIndex =
         storageNextAttendance();
+
+    if (writeIndex >= MAX_ATTENDANCE_RECORDS)
+    {
+        Serial.println("Invalid EEPROM write index.");
+        return;
+    }
 
 
     // Save IN record
@@ -335,6 +388,10 @@ void attendanceHandleFingerprint(uint16_t fingerprintSlot)
     }
 
 
+    // ==============================================
+    // IN SUCCESSFULLY RECORDED
+    // ==============================================
+
     Serial.println();
     Serial.println("IN SUCCESSFULLY RECORDED");
 
@@ -355,4 +412,8 @@ void attendanceHandleFingerprint(uint16_t fingerprintSlot)
     );
 
     Serial.println("================================");
+
+    // Report successful IN
+    lastAttendanceResult =
+        ATTENDANCE_RESULT_IN_RECORDED;
 }

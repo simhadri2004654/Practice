@@ -3,8 +3,8 @@
 #include <Arduino.h>
 
 // Wi-Fi credentials
-#define WIFI_SSID "Lakshiv"
-#define WIFI_PASSWORD "kanGan#072010"
+#define WIFI_SSID "SRC 24G"
+#define WIFI_PASSWORD "12345678"
 
 // Fallback Wi-Fi access point
 #define FALLBACK_AP_SSID "Lakshiv"
