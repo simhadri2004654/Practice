@@ -3,12 +3,12 @@
 #include <Arduino.h>
 
 // Wi-Fi credentials
-#define WIFI_SSID "Lakshiv"
+#define WIFI_SSID "Lakshiv_IoT"
 #define WIFI_PASSWORD "kanGan#072010"
 
 // Fallback Wi-Fi access point
 #define FALLBACK_AP_SSID "Lakshiv"
-#define FALLBACK_AP_PASSWORD "Attend123"
+#define FALLBACK_AP_PASSWORD "kanGan#072010"
 
 // R503 UART pins
 static constexpr uint8_t FINGERPRINT_RX_PIN = 12; // GPIO12 / D6
