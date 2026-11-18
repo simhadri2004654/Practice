@@ -42,70 +42,85 @@ static const char DASHBOARD_PAGE[] PROGMEM = R"rawliteral(
     box-sizing: border-box;
 }
 
+html {
+    min-height: 100%;
+}
+
 body {
     margin: 0;
     min-height: 100vh;
     font-family: Arial, Helvetica, sans-serif;
     color: var(--ink);
-    background: #eaf3ff;
+
+    /* =====================================
+       FULL WEBSITE BUILDING BACKGROUND
+       Position towards top to show
+       company name on building
+    ===================================== */
+
+    background-color: #dceaff;
+
+    background-image:
+        linear-gradient(
+            rgba(4, 28, 65, .04),
+            rgba(4, 28, 65, .04)
+        ),
+        url('/building.jpg');
+
+    background-size: cover;
+    background-position: center 20%;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
 }
 
 
 /* =========================================
-   COMPANY BUILDING HEADER
+   COMPANY HEADER
+   Uses the same BODY background.
+   No duplicate building image.
+   No backdrop blur.
 ========================================= */
 
 .hero {
-    min-height: 230px;
-    padding: 25px 4.5%;
+    min-height: 205px;
+    padding: 20px 4.5%;
 
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 20px;
 
-    background-color: #0b3471;
-
-    background-image:
-        linear-gradient(
-            90deg,
-            rgba(225, 241, 255, .96) 0%,
-            rgba(225, 241, 255, .87) 40%,
-            rgba(7, 37, 83, .15) 100%
-        ),
-        url('/building.jpg');
-
-    background-size: cover;
-    background-position: center;
-    background-repeat: no-repeat;
+    background: rgba(225, 241, 255, .08);
 
     border-bottom: 3px solid #58aaff;
+
+    box-shadow: 0 5px 15px rgba(0, 20, 60, .12);
 }
 
 .brand {
     display: flex;
     align-items: center;
-    gap: 18px;
+    gap: 15px;
     min-width: 0;
 }
 
 .brand-mark {
-    width: 72px;
-    height: 72px;
-    flex: 0 0 72px;
+    width: 64px;
+    height: 64px;
+    flex: 0 0 64px;
 
     display: grid;
     place-items: center;
 
     border: 3px solid #1761bd;
-    border-radius: 15px;
+    border-radius: 14px;
 
     color: white;
     background: linear-gradient(145deg, #0b65d9, #092b62);
 
     box-shadow: 0 5px 16px rgba(0, 51, 130, .25);
 
-    font-size: 27px;
+    font-size: 24px;
     font-weight: 800;
 }
 
@@ -115,21 +130,24 @@ body {
 
     color: #082b62;
 
-    font-size: clamp(20px, 2.5vw, 34px);
+    font-size: clamp(19px, 2.3vw, 30px);
     line-height: 1.15;
     font-weight: 800;
     letter-spacing: .2px;
-    text-shadow: 0 1px 2px rgba(255,255,255,.4);
+
+    text-shadow: 0 1px 3px rgba(255,255,255,.85);
 }
 
 .tagline {
-    margin: 12px 0 0;
+    margin: 9px 0 0;
 
     color: #1252a0;
-    font-size: 17px;
+    font-size: 16px;
     font-weight: 700;
     font-style: italic;
     letter-spacing: .7px;
+
+    text-shadow: 0 1px 3px rgba(255,255,255,.8);
 }
 
 .hero-right {
@@ -176,6 +194,8 @@ body {
     color: #082b62;
     font-size: 13px;
     font-weight: 700;
+
+    text-shadow: 0 1px 3px rgba(255,255,255,.85);
 }
 
 
@@ -191,7 +211,11 @@ nav {
 
     padding: 11px 4.5%;
 
-    background: linear-gradient(100deg, #042860, #084997);
+    background: linear-gradient(
+        100deg,
+        rgba(4, 40, 96, .88),
+        rgba(8, 73, 151, .88)
+    );
 
     box-shadow: 0 5px 18px rgba(0, 27, 70, .22);
 }
@@ -241,19 +265,24 @@ main {
     display: block;
 }
 
+
+/* =========================================
+   DASHBOARD GLASS PANEL
+========================================= */
+
 .glass-panel {
     margin-bottom: 17px;
     padding: 22px;
 
-    border: 1px solid white;
+    border: 1px solid rgba(255,255,255,.85);
     border-radius: 17px;
 
-    background: rgba(245, 250, 255, .91);
+    background: rgba(245, 250, 255, .70);
 
-    box-shadow: 0 7px 24px rgba(0, 42, 105, .18);
+    box-shadow: 0 7px 24px rgba(0, 42, 105, .22);
 
-    backdrop-filter: blur(9px);
-    -webkit-backdrop-filter: blur(9px);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
 }
 
 
@@ -321,7 +350,7 @@ main {
     border: 1px solid white;
     border-radius: 16px;
 
-    background: rgba(222, 239, 255, .96);
+    background: rgba(222, 239, 255, .90);
 
     box-shadow: 0 5px 16px rgba(0, 51, 120, .14);
 }
@@ -372,7 +401,7 @@ main {
 /* GREEN CARD */
 
 .stat-card.green {
-    background: rgba(225, 250, 239, .97);
+    background: rgba(225, 250, 239, .92);
     border-color: #80dfb2;
 }
 
@@ -389,7 +418,7 @@ main {
 /* PURPLE CARD */
 
 .stat-card.purple {
-    background: rgba(239, 233, 255, .97);
+    background: rgba(239, 233, 255, .92);
     border-color: #bba1ff;
 }
 
@@ -406,7 +435,7 @@ main {
 /* ORANGE CARD */
 
 .stat-card.orange {
-    background: rgba(255, 239, 224, .97);
+    background: rgba(255, 239, 224, .92);
     border-color: #ffc184;
 }
 
@@ -421,7 +450,7 @@ main {
 
 
 /* =========================================
-   COMPANY INFORMATION ON DASHBOARD
+   COMPANY INFORMATION
 ========================================= */
 
 .company-message {
@@ -435,8 +464,8 @@ main {
     background:
         linear-gradient(
             110deg,
-            rgba(5, 42, 94, .96),
-            rgba(11, 90, 173, .90)
+            rgba(5, 42, 94, .93),
+            rgba(11, 90, 173, .87)
         );
 
     box-shadow: 0 5px 18px rgba(0, 42, 105, .18);
@@ -470,12 +499,15 @@ main {
     padding: 0;
     overflow: hidden;
 
-    border: 1px solid white;
+    border: 1px solid rgba(255,255,255,.85);
     border-radius: 15px;
 
-    background: rgba(245, 250, 255, .95);
+    background: rgba(245, 250, 255, .76);
 
-    box-shadow: 0 6px 19px rgba(0, 39, 98, .16);
+    box-shadow: 0 6px 19px rgba(0, 39, 98, .20);
+
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
 }
 
 .table-heading {
@@ -643,7 +675,12 @@ footer {
     padding: 19px 4.5%;
 
     color: white;
-    background: linear-gradient(100deg, #06245a, #0754b7);
+
+    background: linear-gradient(
+        100deg,
+        rgba(6, 36, 90, .88),
+        rgba(7, 84, 183, .88)
+    );
 
     border-top: 3px solid #5cb4ff;
 
@@ -670,9 +707,15 @@ footer {
     .card-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+
 }
 
 @media (max-width: 600px) {
+
+    body {
+        background-attachment: scroll;
+        background-position: center top;
+    }
 
     .hero {
         min-height: 210px;
@@ -756,6 +799,7 @@ footer {
         align-items: flex-start;
         flex-direction: column;
     }
+
 }
 
 </style>
@@ -767,7 +811,7 @@ footer {
 
 
 <!-- =========================================
-     COMPANY BUILDING AND NAME
+     COMPANY NAME AND HEADER
 ========================================= -->
 
 <header class="hero">
@@ -781,7 +825,7 @@ footer {
         <div class="brand-copy">
 
             <h2>
-                LAKSHIV TECHNOLOGY &amp; SERVICES PVT LIMITED.
+                LAKSHIV TECHNOLOGY &amp; SERVICES PVT LIMITED
             </h2>
 
             <p class="tagline">
@@ -815,7 +859,7 @@ footer {
 
 
 <!-- =========================================
-     THREE NAVIGATION BUTTONS
+     NAVIGATION
 ========================================= -->
 
 <nav>
@@ -881,7 +925,7 @@ footer {
         </div>
 
 
-        <!-- FOUR DASHBOARD SUMMARY CARDS -->
+        <!-- FOUR SUMMARY CARDS -->
 
         <div class="card-grid">
 
@@ -1006,7 +1050,7 @@ footer {
         <div class="company-message">
 
             <h2>
-                Welcome to LAKSHIV TECHNOLOGY &amp; SERVICES
+                Welcome to LAKSHIV TECHNOLOGY &amp; SERVICES PVT LIMITED
             </h2>
 
             <p>
@@ -1211,7 +1255,7 @@ footer {
 
     <div class="footer-name">
         LT &nbsp; | &nbsp;
-        LAKSHIV TECHNOLOGY &amp; SERVICES PVT LIMITED.
+        LAKSHIV TECHNOLOGY &amp; SERVICES PVT LIMITED
     </div>
 
     <div class="footer-tagline">
@@ -1813,14 +1857,9 @@ static String formatTime(uint32_t epoch)
 
 static String formatDate(uint32_t dayKey)
 {
-    const uint32_t year =
-        dayKey / 10000UL;
-
-    const uint32_t month =
-        (dayKey / 100UL) % 100UL;
-
-    const uint32_t day =
-        dayKey % 100UL;
+    const uint32_t year = dayKey / 10000UL;
+    const uint32_t month = (dayKey / 100UL) % 100UL;
+    const uint32_t day = dayKey % 100UL;
 
     char buffer[16];
 
@@ -2242,21 +2281,33 @@ static void handleAttendanceApi()
 
 
 // =====================================================
-// BUILDING BACKGROUND IMAGE
+// SERVE COMPANY BUILDING BACKGROUND
 // File: data/building.jpg
+// URL: /building.jpg
 // =====================================================
 
 static void handleBuildingImage()
 {
-    if (
-        !littleFsReady ||
-        !LittleFS.exists("/building.jpg")
-    )
+    if (!littleFsReady)
     {
+        server.send(
+            500,
+            "text/plain",
+            "LittleFS is not mounted."
+        );
+
+        return;
+    }
+
+
+    if (!LittleFS.exists("/building.jpg"))
+    {
+        Serial.println("ERROR: /building.jpg not found in LittleFS.");
+
         server.send(
             404,
             "text/plain",
-            "building.jpg not found in LittleFS"
+            "building.jpg not found. Upload data folder using uploadfs."
         );
 
         return;
@@ -2272,16 +2323,23 @@ static void handleBuildingImage()
         server.send(
             500,
             "text/plain",
-            "Could not open building.jpg"
+            "Could not open building.jpg."
         );
 
         return;
     }
 
 
+    // Disable browser image caching
+
     server.sendHeader(
         "Cache-Control",
-        "public, max-age=86400"
+        "no-store, no-cache, must-revalidate"
+    );
+
+    server.sendHeader(
+        "Pragma",
+        "no-cache"
     );
 
 
@@ -2292,6 +2350,8 @@ static void handleBuildingImage()
 
 
     imageFile.close();
+
+    Serial.println("Building background image served.");
 }
 
 
@@ -2301,24 +2361,38 @@ static void handleBuildingImage()
 
 void webServerBegin()
 {
-    // Initialize LittleFS
+    // ==============================================
+    // INITIALIZE LITTLEFS
+    // ==============================================
+
+    Serial.println("Mounting LittleFS...");
 
     littleFsReady = LittleFS.begin();
 
     if (littleFsReady)
     {
         Serial.println("LittleFS mounted successfully.");
-        Serial.println("Building background ready.");
+
+        if (LittleFS.exists("/building.jpg"))
+        {
+            Serial.println("Company building image found.");
+        }
+        else
+        {
+            Serial.println("WARNING: building.jpg is missing.");
+            Serial.println("Place image in data/building.jpg.");
+        }
     }
     else
     {
-        Serial.println(
-            "LittleFS mount failed. Building background unavailable."
-        );
+        Serial.println("LittleFS mount failed.");
+        Serial.println("Building background unavailable.");
     }
 
 
-    // Main website
+    // ==============================================
+    // MAIN WEBSITE
+    // ==============================================
 
     server.on(
         "/",
@@ -2334,7 +2408,9 @@ void webServerBegin()
     );
 
 
-    // Building image
+    // ==============================================
+    // COMPANY BUILDING IMAGE
+    // ==============================================
 
     server.on(
         "/building.jpg",
@@ -2343,7 +2419,9 @@ void webServerBegin()
     );
 
 
-    // Dashboard summary
+    // ==============================================
+    // DASHBOARD SUMMARY
+    // ==============================================
 
     server.on(
         "/api/summary",
@@ -2352,7 +2430,9 @@ void webServerBegin()
     );
 
 
-    // Employee database
+    // ==============================================
+    // EMPLOYEE DATABASE
+    // ==============================================
 
     server.on(
         "/api/employees",
@@ -2361,7 +2441,9 @@ void webServerBegin()
     );
 
 
-    // Attendance database
+    // ==============================================
+    // ATTENDANCE DATABASE
+    // ==============================================
 
     server.on(
         "/api/attendance",
@@ -2370,7 +2452,9 @@ void webServerBegin()
     );
 
 
-    // Unknown URL
+    // ==============================================
+    // UNKNOWN URL
+    // ==============================================
 
     server.onNotFound(
         []()
@@ -2383,6 +2467,10 @@ void webServerBegin()
         }
     );
 
+
+    // ==============================================
+    // START HTTP SERVER
+    // ==============================================
 
     server.begin();
 

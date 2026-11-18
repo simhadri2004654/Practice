@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <Ticker.h>
+#include <ArduinoOTA.h>
 #include <time.h>
 #include <string.h>
 #include <stdlib.h>
@@ -19,6 +20,16 @@
 
 static bool storageReady = false;
 static bool fingerprintReady = false;
+
+
+// ==================================================
+// FOTA / OTA CONFIGURATION
+// ==================================================
+
+static const char *OTA_HOSTNAME = "lakshiv-attendance";
+static const char *OTA_PASSWORD = "PASSWORD";
+
+static bool otaReady = false;
 
 
 // ==================================================
@@ -75,6 +86,7 @@ static volatile uint8_t activityFlashTick = 0;
 // ==================================================
 
 static void connectWiFi();
+static void setupOTA();
 static void printHelp();
 
 static int16_t findFreeEmployeeIndex();
@@ -428,6 +440,90 @@ static void connectWiFi()
 
         Serial.println("Internet time synchronization unavailable.");
     }
+}
+
+
+// ==================================================
+// INITIALIZE FOTA / OTA
+// ==================================================
+
+static void setupOTA()
+{
+    // OTA requires the ESP8266 to be connected to router Wi-Fi.
+    // It is not started when connectWiFi() uses the fallback AP.
+    if (WiFi.status() != WL_CONNECTED)
+    {
+        Serial.println("OTA disabled: Router Wi-Fi is not connected.");
+        otaReady = false;
+        return;
+    }
+
+    ArduinoOTA.setHostname(OTA_HOSTNAME);
+    ArduinoOTA.setPassword(OTA_PASSWORD);
+
+    ArduinoOTA.onStart([]()
+    {
+        Serial.println();
+        Serial.println("OTA update started.");
+        Serial.println("Receiving firmware...");
+    });
+
+    ArduinoOTA.onEnd([]()
+    {
+        Serial.println();
+        Serial.println("OTA update completed.");
+        Serial.println("ESP8266 will restart.");
+    });
+
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
+    {
+        if (total > 0)
+        {
+            Serial.printf(
+                "OTA Progress: %u%%\r",
+                (progress * 100U) / total
+            );
+        }
+    });
+
+    ArduinoOTA.onError([](ota_error_t error)
+    {
+        Serial.printf("\nOTA Error: %u\n", error);
+
+        if (error == OTA_AUTH_ERROR)
+        {
+            Serial.println("OTA authentication failed.");
+        }
+        else if (error == OTA_BEGIN_ERROR)
+        {
+            Serial.println("OTA begin failed.");
+        }
+        else if (error == OTA_CONNECT_ERROR)
+        {
+            Serial.println("OTA connection failed.");
+        }
+        else if (error == OTA_RECEIVE_ERROR)
+        {
+            Serial.println("OTA firmware receiving failed.");
+        }
+        else if (error == OTA_END_ERROR)
+        {
+            Serial.println("OTA finalization failed.");
+        }
+    });
+
+    ArduinoOTA.begin();
+    otaReady = true;
+
+    Serial.println();
+    Serial.println("======================================");
+    Serial.println("FOTA SERVICE READY");
+    Serial.print("OTA Hostname: ");
+    Serial.println(OTA_HOSTNAME);
+    Serial.print("OTA IP Address: ");
+    Serial.println(WiFi.localIP());
+    Serial.println("OTA Port: 8266");
+    Serial.println("======================================");
 }
 
 
@@ -1160,6 +1256,9 @@ void setup()
     Serial.println();
     connectWiFi();
 
+    // Initialize wireless firmware update service
+    setupOTA();
+
 
     // ==============================================
     // START WEBSITE
@@ -1184,6 +1283,12 @@ void setup()
 
 void loop()
 {
+    // Handle wireless firmware update requests
+    if (otaReady)
+    {
+        ArduinoOTA.handle();
+    }
+
     // Handle website clients
     webServerHandleClient();
 
