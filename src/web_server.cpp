@@ -1594,7 +1594,8 @@ function createStatusCell(row, record)
         (completed ? 'status-complete' : 'status-progress');
 
     pill.textContent =
-        completed ? 'EMPLOYEE OUT' : 'EMPLOYEE IN';
+        record.status ||
+        (completed ? 'EMPLOYEE OUT' : 'EMPLOYEE IN');
 
     cell.appendChild(pill);
 
@@ -1652,10 +1653,12 @@ function renderAttendance()
 
         createStatusCell(row, record);
 
-        createCell(
-            row,
-            durationText(record.durationSeconds)
-        );
+        const duration =
+            record.status === 'OUT NOT SCANNED'
+                ? 'NOT RECORDED'
+                : durationText(record.durationSeconds);
+
+        createCell(row, duration);
 
         tbody.appendChild(row);
     });
@@ -2155,6 +2158,9 @@ static void handleAttendanceApi()
 
     const time_t now = time(nullptr);
 
+    uint32_t todayKey = 0;
+    const bool clockReady = getTodayKey(todayKey);
+
     uint16_t sent = 0;
 
 
@@ -2223,7 +2229,12 @@ static void handleAttendanceApi()
                 duration =
                     record.outEpoch - record.inEpoch;
             }
-            else if (now > (time_t)record.inEpoch)
+            else if (
+                record.outEpoch == 0 &&
+                clockReady &&
+                record.dayKey == todayKey &&
+                now > (time_t)record.inEpoch
+            )
             {
                 duration =
                     (uint32_t)now - record.inEpoch;
@@ -2257,6 +2268,18 @@ static void handleAttendanceApi()
             "\",\"outTime\":\"" +
 
             formatTime(record.outEpoch) +
+
+            "\",\"status\":\"" +
+
+            String(
+                record.outEpoch > 0
+                    ? "EMPLOYEE OUT"
+                    : (
+                        clockReady && record.dayKey == todayKey
+                            ? "EMPLOYEE IN"
+                            : "OUT NOT SCANNED"
+                    )
+            ) +
 
             "\",\"durationSeconds\":" +
 
